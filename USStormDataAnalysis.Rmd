@@ -1,0 +1,889 @@
+---
+title: Severe storm events and their impact on population health and the economy of the United States (1950 - 2011)
+author: Elmar Langholz
+date: March 21, 2015
+output:
+  html_document:
+    toc: true
+    toc_depth: 6
+    keep_md: yes
+---
+
+## Synopsis
+
+The [NOAA's National Climatic Data Center (NCDC)](http://www.ncdc.noaa.gov/) is responsible for preserving, monitoring, assessing, and providing public access to the Nation's treasure of climate and historical weather data and information. Since 1950, it has been recording occurrence of storms and other significant weather phenomena having sufficient intensity to cause loss of life, injuries, significant property damage, and/or disruption to commerce. With the use of these recordings, we have analyzed the economical consequences as well as harmfulness to the populations of the different event types. With these we could potentially prioritize resources and plan ahead for future events that might occur in the United States. 
+
+We have found that the most harmful event type overall that has impacted the populations health in the United States from 1950 to November 2011 is the **Tornado causing a total of both injuries and fatatilies in the order of one hundred thousand**. Analogously, we also discovered that (for the same period) the overall event type that has caused the greatest total economic damage has been the **Flood causing damages in the order of one hundred and sixty billion USD**. **While the event type that causes the highest fatalities on every occurrence (average) is the Tsunami, the event type that causes the highest number of injuries on every occurrence (average) is the Hurracaine (Typhoon)**. As a point in hand, **the event type that has the largest economic loss per occurrence (average) is the Hurricane (Typhoon)**.
+
+## Data Processing
+
+In order perform the data analysis, the first thing that we need to do is gain access to is the actual data and read it. NOAA's NCDC has publicly shared the [storm data set](https://d396qusza40orc.cloudfront.net/repdata%2Fdata%2FStormData.csv.bz2) which covers storm events from 1950 to the end of November 2011 and the registered data points. This is the data set that we will be leveraging.
+
+### Loading libraries
+
+```{r setup,echo=TRUE,results='hide',warning=FALSE}
+enforceInstallAndLoadPackage <- function (package) {
+    if (!(package %in% rownames(installed.packages())) ) {
+        install.packages(package, repos = "http://cran.rstudio.com/")
+    }
+    
+    library(package, character.only = TRUE)
+}
+
+enforceInstallAndLoadPackage("plyr")
+enforceInstallAndLoadPackage("ggplot2")
+enforceInstallAndLoadPackage("stringr")
+enforceInstallAndLoadPackage("stringdist")
+enforceInstallAndLoadPackage("knitr")
+
+# Multiple plot function (http://www.cookbook-r.com/Graphs/Multiple_graphs_on_one_page_(ggplot2)/)
+#
+# ggplot objects can be passed in ..., or to plotlist (as a list of ggplot objects)
+# - cols:   Number of columns in layout
+# - layout: A matrix specifying the layout. If present, 'cols' is ignored.
+#
+# If the layout is something like matrix(c(1,2,3,3), nrow=2, byrow=TRUE),
+# then plot 1 will go in the upper left, 2 will go in the upper right, and
+# 3 will go all the way across the bottom.
+#
+multiplot <- function(..., plotlist=NULL, file, cols=1, layout=NULL) {
+  library(grid)
+
+  # Make a list from the ... arguments and plotlist
+  plots <- c(list(...), plotlist)
+
+  numPlots = length(plots)
+
+  # If layout is NULL, then use 'cols' to determine layout
+  if (is.null(layout)) {
+    # Make the panel
+    # ncol: Number of columns of plots
+    # nrow: Number of rows needed, calculated from # of cols
+    layout <- matrix(seq(1, cols * ceiling(numPlots/cols)),
+                    ncol = cols, nrow = ceiling(numPlots/cols))
+  }
+
+ if (numPlots==1) {
+    print(plots[[1]])
+
+  } else {
+    # Set up the page
+    grid.newpage()
+    pushViewport(viewport(layout = grid.layout(nrow(layout), ncol(layout))))
+
+    # Make each plot, in the correct location
+    for (i in 1:numPlots) {
+      # Get the i,j matrix positions of the regions that contain this subplot
+      matchidx <- as.data.frame(which(layout == i, arr.ind = TRUE))
+
+      print(plots[[i]], vp = viewport(layout.pos.row = matchidx$row,
+                                      layout.pos.col = matchidx$col))
+    }
+  }
+}
+```
+
+### Downloading the data if it is not present
+
+The first thing to check before we can begin is whether or not we have the data locally in our disk. We do this for performance reasons (its faster to load data of the local disk than the network). In order to do this we can use the below function which will download and save the data if it is not present in our current directory. In the case that the data is already present, it just returns the name of the archive which contains it.
+```{r downloadDataIfNotPresent,echo=TRUE,results='hide'}
+downloadDataIfNotPresent <- function () {
+    archiveName <- "./stormdata.csv.bz2"
+    if (!file.exists(archiveName)) {
+        url <- "https://d396qusza40orc.cloudfront.net/repdata%2Fdata%2FStormData.csv.bz2"
+        download.file(url, archiveName, method = "curl")
+    }
+    
+    archiveName
+}
+
+archiveName <- downloadDataIfNotPresent()
+```
+
+### Loading/reading the data into memory
+
+Since the data is archived using the [bzip2](https://en.wikipedia.org/wiki/Bzip2) compression algorithm, we first establish a read-only connection to the archive and read the [comma-separated values](https://en.wikipedia.org/wiki/Comma-separated_values) file with the intent of having all the data handy. Finally, we close the connection since we no longer need it.
+```{r loadDataInMemory,echo=TRUE,cache=TRUE}
+bzipConnection <- bzfile(archiveName, "r")
+data <- read.csv(bzipConnection)
+close(bzipConnection)
+rm(bzipConnection)
+```
+
+### Exploratory glance of the data
+
+Having loaded the data in-memory, lets take a look at the structure to have a feeling for what we are dealing with.
+```{r dataStructure,echo=TRUE}
+str(data)
+```
+
+The data set consists of `r as.character(nrow(data))` observations (rows) and `r as.character(ncol(data))` variables (columns).
+
+In order to perform our analysis, out of all the provided rows we will use the following seven:
+
+
+Column name     | Description                   
+--------------- | ----------------------------------------
+ EVTYPE         | The event type
+ FATALITIES     | The number of fatalities for the event
+ INJURIES       | The number of injuries for the event
+ PROPDMG        | The property damage quantity
+ PROPDMGEXP     | The property damage exponent
+ CROPDMG        | The crop damage property
+ CROPDMGEXP     | The crop damage exponent
+
+ 
+To make it easier to manipulate the data, lets convert all the relevant factor variable to characters.
+```{r convertFactorsToCharacters,echo=TRUE,results='hide'}
+data$EVTYPE <- as.character(data$EVTYPE)
+data$PROPDMGEXP <- as.character(data$PROPDMGEXP)
+data$CROPDMGEXP <- as.character(data$CROPDMGEXP)
+```
+
+#### Event Types
+
+Lets first identify the types of storm events that we are going to be dealing with. The provided [storm data set documentation](https://d396qusza40orc.cloudfront.net/repdata%2Fpeer2_doc%2Fpd01016005curr.pdf), in *Section 2.1 (page 5)*, states that "*The only events permitted in Storm Data are listed in Table 1 of Section 2.1.1.*". The table consists of the following 48 events:
+
+Event type(s)                   | Event type(s)              | Event type(s)                          
+------------------------------- | -------------------------- | -----------------------------
+1. Astronomical Low Tide        |  17. Funnel Cloud          |  33. Marine Thunderstorm Wind
+2. Avalanche                    |  18. Freezing Fog          |  34. Rip Current
+3. Blizzard                     |  19. Hail                  |  35. Seiche
+4. Coastal Flood                |  20. Heat                  |  36. Sleet
+5. Cold/Wind Chill              |  21. Heavy Rain            |  37. Storm Surge/Tide
+6. Debris Flow                  |  22. Heavy Snow            |  38. Strong Wind
+7. Dense Fog                    |  23. High Surf             |  39. Thunderstorm Wind
+8. Dense Smoke                  |  24. High Wind             |  40. Tornado
+9. Drought                      |  25. Hurricane (Typhoon)   |  41. Tropical Depression
+10. Dust Devil                  |  26. Ice Storm             |  42. Tropical Storm
+11. Dust Storm                  |  27. Lake-Effect Snow      |  43. Tsunami
+12. Excessive Heat              |  28. Lakeshore Flood       |  44. Volcanic Ash
+13. Extreme Cold/Wind Chill     |  29. Lightning             |  45. Waterspout
+14. Flash Flood                 |  30. Marine Hail           |  46. Wildfire
+15. Flood                       |  31. Marine High Wind      |  47. Winter Storm
+16. Frost/Freeze                |  32. Marine Strong Wind    |  48. Winter Weather
+
+However, taking a look at the data set's *EVTYPE* variable we are able to determine that in reality this constraint does not apply since it shows that the variable is a character containing `r as.character(length(unique(data$EVTYPE)))` unique values.
+
+Diving deeper into the atual event types by taking the first 48 events we can identify that the data is actually dirty and non-standarized.
+```{r first48EventTypes,echo=TRUE}
+head(unique(data$EVTYPE), 48)
+```
+
+#### Fatalities and injuries
+
+Since fatalities and injuries (see Page 9 of the [storm data set documentation](https://d396qusza40orc.cloudfront.net/repdata%2Fpeer2_doc%2Fpd01016005curr.pdf)) are both numerical values, it makes sense that these have the following range: [0, MAX]. It is illogical to have negative fatalities or injuries, so lets validate that our data set complies with this assumption.
+
+```{r validateNonNegativeFatalities,echo=TRUE}
+sum(data$FATALITIES < 0)
+```
+
+```{r validateNonNegativeInjuries,echo=TRUE}
+sum(data$INURIES < 0)
+```
+
+This validates our assumption, so we don't really need to do anything further on these.
+
+#### Property and crop damage
+
+Since the property and crop damage (see Page 12 of the [storm data set documentation](https://d396qusza40orc.cloudfront.net/repdata%2Fpeer2_doc%2Fpd01016005curr.pdf)) are both numerical values it makes sense that these have the following range: [0, MAX]. Since its illogical to have negative property or crop damage, lets validate that our data set complies with this assumption.
+
+```{r validateNonNegativePropertyDamage,echo=TRUE}
+sum(data$PROPDMG < 0)
+```
+
+```{r validateNonNegativeCropDamage,echo=TRUE}
+sum(data$CROPDMG < 0)
+```
+
+This validates our assumption, so we don't really need to do anything further on these.
+
+#### Property and crop damage exponents
+
+The property and crop damage exponents are qualifiers that determine the actual quantity representing their corresponding damage value. Here are the actual values:
+
+```{r propertyDamageExponents,echo=TRUE}
+sort(unique(data$PROPDMGEXP))
+```
+
+```{r cropDamageExponents,echo=TRUE}
+sort(unique(data$CROPDMGEXP))
+```
+
+While most of the exponents are using [short scale](https://en.wikipedia.org/wiki/Long_and_short_scales) [metric prefix symbols](https://en.wikipedia.org/wiki/Metric_prefix) to indicate the the actual scale of the referenced value, the following scale value(s) are uknown: "",  "?", "0", "1", "2", "3", "4", "5", "6", "7", "8", "-", "+".
+
+Due to the lack of documentation, in order to determine the actual scale for which they correspond, we can search for an instance of each in our observations and take a look at the way that the NCDC NOAA [website](http://www.ncdc.noaa.gov/stormevents/choosedates.jsp?statefips=-999%2CALL#) resolved these. At the writing of this anlaysis the [latest](http://www.ncdc.noaa.gov/stormevents/versions.jsp) was Version 3.0 (May 12, 2014).
+
+##### Empty chatacter ("")
+
+Searching the data set for observations in whose exponent is an empty character and damage value is larger than zero:
+```{r findFirstEmptyCharacterExponent,echo=TRUE}
+indexes <- which((data$PROPDMGEXP == "") & (data$PROPDMG > 0))
+if (length(indexes) > 0) {
+    matchingObservations <- unique(data[indexes, c("EVTYPE", "PROPDMG", "PROPDMGEXP")])
+    print(matchingObservations)
+    data[indexes, ][which(data[indexes, ]$EVTYPE == "TORNADO")[1], ]
+} else {
+    print("No observations found that comply with constraint with respect to property damage")
+}
+
+indexes <- which((data$CROPDMGEXP == "") & (data$CROPDMG > 0))
+if (length(indexes) > 0) {
+    matchingObservations <- unique(data[indexes, c("EVTYPE", "CROPDMG", "CROPDMGEXP")])
+    print(matchingObservations)
+    data[indexes, ][which(data[indexes, ]$EVTYPE == "HAIL")[1], ]
+} else {
+    print("No observations found that comply with constraint with respect to crop damage")
+}
+```
+
+Searching the website for a matching observation:
+
+* The property damage [search](http://www.ncdc.noaa.gov/stormevents/listevents.jsp?eventType=%28C%29+Tornado&beginDate_mm=01&beginDate_dd=08&beginDate_yyyy=1993&endDate_mm=01&endDate_dd=08&endDate_yyyy=1993&county=UNION%3A125&hailfilter=0.00&tornfilter=0&windfilter=000&sort=DT&submitbutton=Search&statefips=12%2CFLORIDA) yields the result that for that observation, the estimated property damage (PrD) is equal to zero.
+* The crop damage [search](http://www.ncdc.noaa.gov/stormevents/listevents.jsp?eventType=%28C%29+Hail&beginDate_mm=07&beginDate_dd=04&beginDate_yyyy=1994&endDate_mm=07&endDate_dd=04&endDate_yyyy=1994&county=STUTSMAN%3A93&hailfilter=0.00&tornfilter=0&windfilter=000&sort=DT&submitbutton=Search&statefips=38%2CNORTH+DAKOTA) yields the result that for that observation the estimated crop damage (CrD) is equal to zero.
+
+**Given these two observations, we can generalize the fact that we can set the numerical value (multiplier) to zero.**
+
+##### Question mark ("?")
+
+Searching the data set for observations in whose exponent is a question mark character and damage value is larger than zero:
+```{r findFirstQuestionMarkCharacterExponent,echo=TRUE}
+indexes <- which((data$PROPDMGEXP == "?") & (data$PROPDMG > 0))
+if (length(indexes) > 0) {
+    matchingObservations <- unique(data[indexes, c("EVTYPE", "PROPDMG", "PROPDMGEXP")])
+    print(matchingObservations)
+} else {
+    print("No observations found that comply with constraint with respect to property damage")
+}
+
+indexes <- which((data$CROPDMGEXP == "?") & (data$CROPDMG > 0))
+if (length(indexes) > 0) {
+    matchingObservations <- unique(data[indexes, c("EVTYPE", "CROPDMG", "CROPDMGEXP")])
+    print(matchingObservations)
+} else {
+    print("No observations found that comply with constraint with respect to crop damage")
+}
+```
+
+**Given that there are no observations, we can generalize the fact that we can set the numerical value (multiplier) to zero.**
+
+##### Minus ("-")
+
+Searching the data set for observations in whose exponent is a minus character and damage value is larger than zero:
+```{r findFirstMinusCharacterExponent,echo=TRUE}
+indexes <- which((data$PROPDMGEXP == "-") & (data$PROPDMG > 0))
+if (length(indexes) > 0) {
+    matchingObservations <- unique(data[indexes, c("EVTYPE", "PROPDMG", "PROPDMGEXP")])
+    print(matchingObservations)
+    data[indexes, ][which(data[indexes, ]$EVTYPE == "HIGH WIND")[1], ]
+} else {
+    print("No observations found that comply with constraint with respect to property damage")
+}
+
+indexes <- which((data$CROPDMGEXP == "-") & (data$CROPDMG > 0))
+if (length(indexes) > 0) {
+    matchingObservations <- unique(data[indexes, c("EVTYPE", "CROPDMG", "CROPDMGEXP")])
+    print(matchingObservations)
+} else {
+    print("No observations found that comply with constraint with respect to crop damage")
+}
+```
+
+Searching the website for a matching observation:
+
+* The property damage search yielded no results.
+
+**Given that there are no matching search website results for the property damage constraint and there are no crop damage observations,we can generalize the fact that we can set the numerical value (multiplier) to zero.**
+
+##### Plus ("+")
+
+Searching the data set for observations in whose exponent is a plus character and damage value is larger than zero:
+```{r findFirstPlusCharacterExponent,echo=TRUE}
+indexes <- which((data$PROPDMGEXP == "+") & (data$PROPDMG > 0))
+if (length(indexes) > 0) {
+    matchingObservations <- unique(data[indexes, c("EVTYPE", "PROPDMG", "PROPDMGEXP")])
+    print(matchingObservations)
+    data[indexes, ][which(data[indexes, ]$EVTYPE == "TORNADO")[1], ]
+} else {
+    print("No observations found that comply with constraint with respect to property damage")
+}
+
+indexes <- which((data$CROPDMGEXP == "+") & (data$CROPDMG > 0))
+if (length(indexes) > 0) {
+    matchingObservations <- unique(data[indexes, c("EVTYPE", "CROPDMG", "CROPDMGEXP")])
+    print(matchingObservations)
+} else {
+    print("No observations found that comply with constraint with respect to crop damage")
+}
+```
+
+Searching the website for a matching observation:
+
+* The property damage [search](http://www.ncdc.noaa.gov/stormevents/listevents.jsp?eventType=ALL&beginDate_mm=06&beginDate_dd=05&beginDate_yyyy=1995&endDate_mm=06&endDate_dd=05&endDate_yyyy=1995&county=ALL&hailfilter=0.00&tornfilter=0&windfilter=000&sort=DT&submitbutton=Search&statefips=32%2CNEVADA) yields the result that for that observation, the estimated property damage (PrD) is equal to 0.06K or 60.
+
+**Given that there are no matching search website results for the crop damage constraint and the property damage observation value equals the existing value, we can generalize the fact that we can set the numerical value (multiplier) to one.**
+
+##### Single digit number values ([0-8])
+
+Searching the data set for observations in whose exponent is a digit character and damage value is larger than zero:
+```{r findFirstDigitCharacterExponent,echo=TRUE}
+indexes <- which((data$PROPDMGEXP == "2") & (data$PROPDMG > 0))
+if (length(indexes) > 0) {
+    matchingObservations <- unique(data[indexes, c("EVTYPE", "PROPDMG", "PROPDMGEXP")])
+    print(matchingObservations)
+    data[indexes, ][which(data[indexes, ]$EVTYPE == "THUNDERSTORM WIND")[1], ]
+} else {
+    print("No observations found that comply with constraint with respect to property damage")
+}
+
+indexes <- which((data$CROPDMGEXP == "0") & (data$CROPDMG > 0))
+if (length(indexes) > 0) {
+    matchingObservations <- unique(data[indexes, c("EVTYPE", "CROPDMG", "CROPDMGEXP")])
+    print(matchingObservations)
+    data[indexes, ][which(data[indexes, ]$EVTYPE == "TORNADO")[1], ]
+} else {
+    print("No observations found that comply with constraint with respect to crop damage")
+}
+```
+
+Searching the website for a matching observation:
+
+* The property damage [search](http://www.ncdc.noaa.gov/stormevents/listevents.jsp?eventType=%28C%29+Thunderstorm+Wind&beginDate_mm=06&beginDate_dd=08&beginDate_yyyy=1995&endDate_mm=06&endDate_dd=08&endDate_yyyy=1995&county=CALLAWAY%3A27&hailfilter=0.00&tornfilter=0&windfilter=000&sort=DT&submitbutton=Search&statefips=29%2CMISSOURI) yields the result that for that observation, the estimated property damage (PrD) is equal to 0.12K or 120.
+* The crop damage [search](http://www.ncdc.noaa.gov/stormevents/listevents.jsp?eventType=%28C%29+Tornado&beginDate_mm=05&beginDate_dd=27&beginDate_yyyy=1995&endDate_mm=05&endDate_dd=27&endDate_yyyy=1995&county=CRAWFORD%3A47&hailfilter=0.00&tornfilter=0&windfilter=000&sort=DT&submitbutton=Search&statefips=19%2CIOWA) yields the result that for that observation the estimated crop damage (CrD) is equal to 0.50K or 500.
+
+**Given these two observations, we can generalize the fact that we can set the numerical value (multiplier) to 10.**
+
+### Data cleaning
+
+Since we have identified that the raw data is actually dirty with (respect to the event types since it doesn't confirm to the specified documentation) and has not been normalized (in the case of the property and crop damage), we will have to perform some data cleaning to be able to map the observations containing the dirty event types to the permitted event types if possible.
+
+#### Subsetting data
+
+Since we will concentrate on the economic and population health impact, lets go ahead and subset the data so that we only keep in memory that which we will need.
+```{r subsetData,echo=TRUE,results='hide'}
+columns <- c("EVTYPE", "FATALITIES", "INJURIES", "PROPDMG", "PROPDMGEXP", "CROPDMG", "CROPDMGEXP")
+data <- data[, columns]
+```
+
+#### Event types
+
+As it stands, there are `r as.character(length(unique(data$EVTYPE)))` different event type values compared to the documented 48. Since we are dealing with a lot more events than expected and we really don't want to miss from use a lot of existing data already recollected, we need to use several strategies to be able to reduce these and have a larger set of observations. Now, its likely that we could have gotten away with not doing any data cleaning for the event types in which case we could be talking about the subset of the data. Since we already have it, lets see if we can reduce the total amount.
+
+##### Normalizing event type names
+
+One of the first strategies that we can use to clean the data up is to normalize the event type names. 
+We will proceed to do the following:
+
+1. Upper-case all the names.
+2. Replace back slashes, forward slashes and/or numbers with a space.
+3. Substitute invalid/special characters for a space.
+4. Collapse multiple contigous spaces into a single space.
+5. Trim spaces, new lines or tabulations from the start and end of the names.
+
+```{r eventTypeNameNormalization,echo=TRUE,cache=TRUE,results='hide'}
+normalizeEventTypes <- function (eventTypes) {
+    eventTypes <- toupper(eventTypes)
+    eventTypes <- str_replace_all(eventTypes, "[/\\]", " ")
+    eventTypes <- str_replace_all(eventTypes, "[0-9]", " ")
+    eventTypes <- str_replace_all(eventTypes, "[?:;.,()?!@#$%^&*+=_-]", " ")
+    eventTypes <- str_replace_all(eventTypes, "[ ]{2,}", " ")
+    eventTypes <- str_trim(eventTypes)
+    eventTypes
+}
+
+data$EVTYPE <- normalizeEventTypes(data$EVTYPE)
+```
+
+**Number of unique values after normalization: `r as.character(length(unique(data$EVTYPE)))`**
+
+##### Cleaning dirty events types
+
+After normalizing the event type names, we are able to identify that there there are the following types of issues with the event type values:
+
+1. Words with an extra suffix (as in terminators like ed, ing, s, etc...)
+2. Abbreviations, acronyms and/or synonyms
+3. Typos or simple mispelled words
+4. Mixed event type names (containing two or more permitted values)
+5. Incorrectly ordered event type names (words are swaped or contain prefix, intermediate or suffix words)
+
+###### Removing words with an extra suffix
+
+First, we construct the permitted event type name values and strip any word suffixes through [stemming](https://en.wikipedia.org/wiki/Stemming) by using a simple [suffix-stripping](https://en.wikipedia.org/wiki/Stemming#Suffix-stripping_algorithms).
+```{r permittedEventTypesConstruction,echo=TRUE}
+createDefinedEventTypes <- function () {
+    definedEventTypes <-
+    "1. Astronomical Low Tide        |  17. Funnel Cloud          |  33. Marine Thunderstorm Wind
+    2. Avalanche                    |  18. Freezing Fog          |  34. Rip Current
+    3. Blizzard                     |  19. Hail                  |  35. Seiche
+    4. Coastal Flood                |  20. Heat                  |  36. Sleet
+    5. Cold/Wind Chill              |  21. Heavy Rain            |  37. Storm Surge/Tide
+    6. Debris Flow                  |  22. Heavy Snow            |  38. Strong Wind
+    7. Dense Fog                    |  23. High Surf             |  39. Thunderstorm Wind
+    8. Dense Smoke                  |  24. High Wind             |  40. Tornado
+    9. Drought                      |  25. Hurricane (Typhoon)   |  41. Tropical Depression
+    10. Dust Devil                  |  26. Ice Storm             |  42. Tropical Storm
+    11. Dust Storm                  |  27. Lake-Effect Snow      |  43. Tsunami
+    12. Excessive Heat              |  28. Lakeshore Flood       |  44. Volcanic Ash
+    13. Extreme Cold/Wind Chill     |  29. Lightning             |  45. Waterspout
+    14. Flash Flood                 |  30. Marine Hail           |  46. Wildfire
+    15. Flood                       |  31. Marine High Wind      |  47. Winter Storm
+    16. Frost/Freeze                |  32. Marine Strong Wind    |  48. Winter Weather"
+    definedEventTypes <- strsplit(definedEventTypes, "[|\n]")
+    definedEventTypes <- str_replace_all(definedEventTypes[[1]], "[.0-9]", "")
+    definedEventTypes <- str_trim(definedEventTypes)
+    definedEventTypes
+}
+
+permittedFromDefinedEventTypes <- function (definedEventTypes) {
+    permittedEventTypes <- str_replace_all(definedEventTypes, "[()]", "")
+    permittedEventTypes <- str_replace_all(permittedEventTypes, "[/-]", " ")
+    permittedEventTypes <- str_trim(permittedEventTypes)
+    permittedEventTypes <- toupper(permittedEventTypes)
+    permittedEventTypes
+}
+
+stripSuffixes <- function (string) {
+    if (length(string) > 0) {
+        words <- strsplit(string, " ")
+        words <- str_replace_all(words[[1]], "LY$", "")
+        words <- str_replace_all(words, "S$", "")
+        words <- str_replace_all(words, "ING$", "")
+        words <- str_replace_all(words, "ED$", "")
+        words <- str_replace_all(words, "E$", "")
+        string <- paste(words, collapse = " ")
+    }
+    
+    string
+}
+
+definedEventTypes <- createDefinedEventTypes()
+permittedEventTypes <- permittedFromDefinedEventTypes(definedEventTypes)
+permittedEventTypesWithoutSuffixes <- vapply(permittedEventTypes, stripSuffixes, FUN.VALUE = character(1))
+```
+
+Following are the permitted event type stemming updates:
+```{r displayPermittedEventTypesStemmingMap,echo=TRUE}
+permittedEventTypeWords <- unlist(strsplit(permittedEventTypes, " "))
+permittedEventTypeWordsWithoutSuffixes <- unlist(strsplit(permittedEventTypesWithoutSuffixes, " "))
+updatedValues <- permittedEventTypeWords != permittedEventTypeWordsWithoutSuffixes
+permittedEventTypesStemmingMap <- data.frame(value = permittedEventTypeWords[updatedValues], replacedWith = permittedEventTypeWordsWithoutSuffixes[updatedValues], row.names = NULL)
+permittedEventTypesStemmingMap
+```
+
+Then, to remove the extra suffixes of the words from the actual event types, we will reuse the previously defined function.
+```{r removingSuffixes,echo=TRUE,cache=TRUE}
+eventTypesWithoutSuffixes <- vapply(data$EVTYPE, stripSuffixes, FUN.VALUE = character(1))
+```
+
+Following are the data event type stemming updates:
+```{r displayEventTypesStemmingMap,echo=TRUE}
+findIndexOfFirstValue <- function (value, values) {
+    index <- which(value == values)[1]
+    index
+}
+
+updatedIndexes <- vapply(unique(data$EVTYPE[data$EVTYPE != eventTypesWithoutSuffixes]),
+                         findIndexOfFirstValue,
+                         FUN.VALUE = numeric(1),
+                         data$EVTYPE)
+eventTypesStemmingMap <- data.frame(value = data$EVTYPE[updatedIndexes], replacedWith = eventTypesWithoutSuffixes[updatedIndexes], row.names = NULL)
+eventTypesStemmingMap <- unique(eventTypesStemmingMap)
+eventTypesStemmingMap
+```
+```{r echo=TRUE,results='hide'}
+data$EVTYPE <- eventTypesWithoutSuffixes
+rm(eventTypesStemmingMap)
+```
+
+**Number of unique values after stemming: `r as.character(length(unique(data$EVTYPE)))`**
+
+###### Replacing abbreviations, acronyms and synonyms
+
+The strategy that we will follow for fixing abbreviations, acronyms and synonyms is going to be a direct replacement. That is, we are going to find and replace words with other words that our intuition state that they are they same. 
+```{r replacingAbbreviationsAcronymsAndSynonyms,echo=TRUE}
+replaceAbbreviationsAcronymsAndSynonyms <- function (eventTypes) {
+    eventTypes <- str_replace_all(eventTypes, fixed("TSTM"), "THUNDERSTORM")
+    eventTypes <- str_replace_all(eventTypes, fixed("TSTMW"), "THUNDERSTORM")
+    eventTypes <- str_replace_all(eventTypes, fixed("HVY"), "HEAVY")
+    eventTypes <- str_replace_all(eventTypes, fixed("SML"), "SMALL")
+    eventTypes <- str_replace_all(eventTypes, fixed("STRM"), "STREAM")
+    eventTypes <- str_replace_all(eventTypes, fixed("DRY"), "DROUGHT")
+    eventTypes <- str_replace_all(eventTypes, fixed("DRIEST"), "DROUGHT")
+    eventTypes <- str_replace_all(eventTypes, fixed("DRYNES"), "DROUGHT")
+    eventTypes <- str_replace_all(eventTypes, fixed("ASHFALL"), "ASH")
+    eventTypes <- str_replace_all(eventTypes, "PRECIP$", "PRECIPITATION")
+    eventTypes <- str_replace_all(eventTypes, fixed("PRECIPITATION"), "RAIN SNOW SLEET HAIL")
+    eventTypes <- str_replace_all(eventTypes, "^TYPHOON$", "HURRICANE TYPHOON")
+    eventTypes <- str_replace_all(eventTypes, fixed("CSTL"), "COASTAL")
+    eventTypes
+}
+
+data$EVTYPE <- replaceAbbreviationsAcronymsAndSynonyms(data$EVTYPE)
+```
+
+**Number of unique values after replacing abbreviations, acronyms and synonyms: `r as.character(length(unique(data$EVTYPE)))`**
+
+###### Resolving typos and simple spelling mistakes
+
+The strategy that we will follow to resolve the typos and simple spelling mistakes is [approximate string matching](https://en.wikipedia.org/wiki/Approximate_string_matching) with replacement. That is we will search for the values that are a closest match to the permitted values or any of the valid words making them and replace them with the permitted if and only if the match is close enough.
+We leverage the permitted event type values and its constructed words [n-grams](https://en.wikipedia.org/wiki/N-gram) to create the replacement table of known values. It is these values which we are going to approximately match, with a maximum distance of 1 while using the [Damerau-Levenshtein distance](https://en.wikipedia.org/wiki/Damerau%E2%80%93Levenshtein_distance), to the event types with the intent of using to replace the ones that match.
+```{r removingTypos,echo=TRUE,cache=TRUE}
+removeTyposWithValues <- function (eventType, table) {
+    cleanEventType <- eventType
+    if (length(eventType) > 0) {
+        indexMatch <- amatch(eventType, table, method = "dl", maxDist = 1)
+        if (is.na(indexMatch)) {
+            splitString <- unlist(strsplit(eventType, " "))
+            splitString <- splitString[nchar(splitString) > 1]
+            splitIndexMatches <- amatch(splitString, table, method = "dl", maxDist = 1)
+            matchVector <- table[splitIndexMatches]
+            matchVector[is.na(splitIndexMatches)] <- splitString[is.na(splitIndexMatches)]
+            cleanEventType <- paste(matchVector, collapse = " ")
+        } else {
+            cleanEventType <- table[indexMatch]
+        }
+    }
+    
+    cleanEventType
+}
+
+removingTypos <- function (eventTypes, permittedEventTypesWithoutSuffixes) {
+    splitPermittedEventTypeWords <- unique(permittedEventTypesWithoutSuffixes)
+    knownWords <- c("ICY", "WILD", "MILD", "BLOW", "ON", "NO", "NON", "OF", "TO", "LAT", "GUST", "BELOW", "LIGHT")
+    replacementTable <- unique(c(permittedEventTypesWithoutSuffixes, splitPermittedEventTypeWords, knownWords))
+    replacedEventTypes <- vapply(data$EVTYPE, removeTyposWithValues, FUN.VALUE = character(1), replacementTable)
+    replacedEventTypes
+}
+
+replacedEventTypes <- removingTypos(data$EVTYPE, permittedEventTypeWordsWithoutSuffixes)
+```
+
+Following are the fixed typo event types:
+```{r displayTypesTypoMap,echo=TRUE}
+updatedIndexes <- vapply(unique(data$EVTYPE[data$EVTYPE != replacedEventTypes]),
+                         findIndexOfFirstValue,
+                         FUN.VALUE = numeric(1),
+                         data$EVTYPE)
+eventTypesTypoMap <- data.frame(value = data$EVTYPE[updatedIndexes],
+                                replacedWith = replacedEventTypes[updatedIndexes],
+                                row.names = NULL)
+eventTypesTypoMap
+
+```
+```{r echo=TRUE,results='hide'}
+data$EVTYPE <- replacedEventTypes
+rm(replacedEventTypes)
+rm(eventTypesTypoMap)
+```
+
+**Number of unique values after removing typos: `r as.character(length(unique(data$EVTYPE)))`**
+
+###### Mapping words
+
+Finally, we will map event types that present all the words (independent of whether they are duplicate or not in order) to the corresponding value by using the ordered permitted event types (most specific to least specific). If the words are all present, we will replace the existing value with the ordered value.
+```{r mapDuplicateAndOutOfOrderValues,echo=TRUE,cache=TRUE}
+countMatchingWords <- function (eventTypeWords, permittedEventTypeWords) {
+    matches <- permittedEventTypeWords %in% eventTypeWords
+    matchCount <- sum(matches)
+    matchCount
+}
+
+mapIfContainsAllWords <- function (permittedEventType, eventTypesWordList) {
+    permittedEventTypeWords <- unlist(strsplit(permittedEventType, " "))
+    matchCounts <- vapply(eventTypesWordList, countMatchingWords, FUN.VALUE = numeric(1), permittedEventTypeWords)
+    matchingIndexes <- which(matchCounts >= length(permittedEventTypeWords))
+    matchingIndexes
+}
+
+mapDuplicateAndOutOfOrderValues <- function (eventTypes, permittedEventTypesWithoutSuffixes) {
+    orderedPermittedEventTypes <- permittedEventTypesWithoutSuffixes[order(nchar(permittedEventTypesWithoutSuffixes),
+                                                                           permittedEventTypesWithoutSuffixes,
+                                                                           decreasing = FALSE)]
+    eventTypesWordList <- strsplit(eventTypes, " ")
+    indexMap <- lapply(orderedPermittedEventTypes, mapIfContainsAllWords, eventTypesWordList)
+    for (index in seq_along(indexMap)) {
+        updateIndexes <- indexMap[[index]]
+        if (length(updatedIndexes) > 0) {
+            eventTypes[updateIndexes] <- orderedPermittedEventTypes[index]
+        }
+    }
+
+    eventTypes
+}
+
+mappedEventTypes <- mapDuplicateAndOutOfOrderValues(data$EVTYPE, permittedEventTypesWithoutSuffixes)
+```
+
+Following are the mapped event types:
+```{r displayMappedEventTypesMap,echo=TRUE}
+updatedIndexes <- vapply(unique(data$EVTYPE[data$EVTYPE != mappedEventTypes]),
+                         findIndexOfFirstValue,
+                         FUN.VALUE = numeric(1),
+                         data$EVTYPE)
+mappedEventTypesMap <- data.frame(value = data$EVTYPE[updatedIndexes], replacedWith = mappedEventTypes[updatedIndexes], row.names = NULL)
+mappedEventTypesMap <- unique(mappedEventTypesMap)
+mappedEventTypesMap
+```
+```{r echo=TRUE,results='hide'}
+data$EVTYPE <- mappedEventTypes
+```
+
+**Number of unique values after mapping events: `r as.character(length(unique(data$EVTYPE)))`**
+
+#### Property and crop damage
+
+From the exploratory analysis, we determined that the property and crop damage values have different scales (reason for the existence of the exponent). We also determine that the actual numeral value(s) for the exponents are as follows:
+
+
+ Exponent value(s)  |  Numeral value    |  Metric prefix  |  Short scale name
+------------------- | ----------------- | --------------- | ------------------
+ "", "?", "-"       |  0                |                 |  Zero
+ "+"                |  1                |                 |  One
+ [0-8]              |  10               |  Deca (D, da)   |  Ten
+ [h|H]              |  100              |  Hecto (h)      |  Hundred
+ [k|K]              |  1,000            |  Kilo (k)       |  Thousdand
+ [m|M]              |  1,000,000        |  Mega (M)       |  Million
+ [b|B]              |  1,000,000,000    |  Giga (G)       |  Billion
+
+
+With this, we can normalize the property and crop damage values by converting their corresponding exponents to a numeral/numeric value (or multiplier) and then multiplying it with its corresponding value. This will allow us to be able to compare the values on the same unitary scale.
+
+##### Normalizing property and crop damage exponent values
+
+By normalizing the exponents, we can reduce the amount of cases that we are dealing with. We normalize the exponents by:
+1. Converting them to upper-case
+2. Removing and heading or leading spaces
+```{r normalizingExponents,echo=TRUE,results='hide'}
+normalizeExponents <- function (exponents) {
+    exponents <- toupper(exponents)
+    exponents <- str_trim(exponents)
+    exponents
+}
+
+data$PROPDMGEXP <- normalizeExponents(data$PROPDMGEXP)
+data$CROPDMGEXP <- normalizeExponents(data$CROPDMGEXP)
+```
+
+##### Mapping the exponents into multipliers
+
+```{r mappingExponentsToMultipliers,echo=TRUE,cache=TRUE,results='hide'}
+multipliersFromExponents <- function (exponents) {
+    patterns <- c("^[?-]{0,1}$", "^[+]{1}$", "^[0-8]{1}$", "^[H]{1}$", "^[K]{1}$", "^[M]{1}$", "^[B]{1}$")
+    numerals <- c(0, 1, 10, 100, 1000, 1000000, 1000000000)
+    for (index in seq_along(patterns)) {
+        exponents <- str_replace_all(exponents, patterns[index], numerals[index])
+    }
+
+    as.numeric(exponents)
+}
+
+data$PROPDMGMUL <- multipliersFromExponents(data$PROPDMGEXP)
+data$CROPDMGMUL <- multipliersFromExponents(data$CROPDMGEXP)
+```
+
+##### Normalizing the property and crop economic damage
+
+The easisest way to normalize the property and crop values would be to create a new variable (column) containing the normalized value. Lets do that as follows:
+```{r normalizePropertyAndCropDamage,echo=TRUE,results='hide'}
+data$NORMPROPDMG <- data$PROPDMG * data$PROPDMGMUL
+data$NORMCROPDMG <- data$CROPDMG * data$CROPDMGMUL
+```
+
+## Data analysis
+
+Having processed the data, we are now able to find an answer to the following two questions:
+
+1. Across the United States, which types of events (as indicated in the EVTYPE variable) are most harmful with respect to population health?
+2. Across the United States, which types of events have the greatest economic consequences?
+
+### Summarizing storm events and their impact on population health
+
+In order to understand which storm event types have had the largest impact on population health, we must first summarize the data and determine what are the total injuries and fatalities for each. Furthermore, it would be also beneficial if we are able to determine how many individuals where injuried and part of a fatality.
+
+First, lets summarize the data by calculating the total injuries and fatalities for each event type:
+```{r calcuateSummaryOfInjuriesAndFatalitiesByEventType,echo=TRUE,results='hide'}
+summaryOfInjuriesAndFatalitiesByEventType <- ddply(data,
+                                                   .(EVTYPE),
+                                                   summarize,
+                                                   meanInjuries = mean(INJURIES),
+                                                   meanFatalities = mean(FATALITIES),
+                                                   totalInjuries = sum(INJURIES),
+                                                   totalFatalities = sum(FATALITIES),
+                                                   total = sum(INJURIES) + sum(FATALITIES))
+```
+
+Then, lets sort (in descending order) the event types that have caused the largest total impact in population health:
+```{r sortSummaryOfInjuriesAndFatalitiesByPermittedEventType,echo=TRUE}
+summaryOfInjuriesAndFatalitiesByEventType <- summaryOfInjuriesAndFatalitiesByEventType[order(summaryOfInjuriesAndFatalitiesByEventType$total, decreasing = TRUE), ]
+print(head(summaryOfInjuriesAndFatalitiesByEventType, 10), row.names = FALSE)
+```
+
+
+### Summarizing storm events and their impact on the economy
+
+In order to understand which storm event types have had the largest impact on the economy, we must first summarize the data and determine what is the total amount of damage in property and crop for each. Furthermore, it would be also beneficial if we are able to determine how much that each storm event caused in damage.
+
+First, lets summarize the data by calculating the total property and crop damage for each event type:
+```{r calculateSummaryOfPropertyAndCropDamages,echo=TRUE,results='hide'}
+summaryOfPropertyAndCropDamagesByEventType <- ddply(data,
+                                                    .(EVTYPE),
+                                                    summarize,
+                                                    meanPropertyDamage = mean(NORMPROPDMG),
+                                                    meanCropDamage = mean(NORMCROPDMG),
+                                                    totalPropertyDamage = sum(NORMPROPDMG),
+                                                    totalCropDamage = sum(NORMCROPDMG),
+                                                    total = sum(NORMPROPDMG) + sum(NORMCROPDMG))
+```
+
+Afterwards, lets sort (in descending order) the event types that have caused the largest total impact in the economy:
+```{r sortSummaryOfPropertyAndCropDamagesByPermittedEventType,echo=TRUE}
+summaryOfPropertyAndCropDamagesByEventType <- summaryOfPropertyAndCropDamagesByEventType[order(summaryOfPropertyAndCropDamagesByEventType$total, decreasing = TRUE), ]
+print(head(summaryOfPropertyAndCropDamagesByEventType, 10), row.names = FALSE)
+```
+
+## Data post-processing
+
+In order to properly present the data in the results sections lets tidy up our summary data.
+
+### Summary subsetting
+
+Since we won't need all of the summarized observations to present the results, lets first remove all the observations which don't have event types which are permitted: 
+```{r subsetSummary,echo=TRUE,results='hide'}
+populationHealthImpactSummary <- summaryOfInjuriesAndFatalitiesByEventType[summaryOfInjuriesAndFatalitiesByEventType$EVTYPE %in% permittedEventTypesWithoutSuffixes, ]
+economicImpactSummary <- summaryOfPropertyAndCropDamagesByEventType[summaryOfPropertyAndCropDamagesByEventType$EVTYPE %in% permittedEventTypesWithoutSuffixes, ]
+```
+
+### Restoring event types values
+
+In order to lets restore the event type values in a readable format so that we can display results
+```{r restoreEventTypeValues,echo=TRUE,results='hide'}
+orderedIndexes <- order(nchar(permittedEventTypesWithoutSuffixes), permittedEventTypesWithoutSuffixes, decreasing = TRUE)
+for (index in orderedIndexes) {
+    pattern <- permittedEventTypesWithoutSuffixes[index]
+    replacement <- definedEventTypes[index]
+    populationHealthImpactSummary$EVTYPE <- str_replace(populationHealthImpactSummary$EVTYPE, pattern, replacement)
+    economicImpactSummary$EVTYPE <- str_replace(economicImpactSummary$EVTYPE, pattern, replacement)
+}
+```
+
+### Ordering event types by totals
+
+Ordering the event types by the totals will allow us to graphically visualize through a bar chart the event types which have caused the most impact to the least. 
+```{r orderEventTypesByTotals,echo=TRUE,results='hide'}
+populationHealthImpactSummary$EVTYPE <- factor(populationHealthImpactSummary$EVTYPE, levels = populationHealthImpactSummary$EVTYPE[order(populationHealthImpactSummary$total, decreasing = TRUE)])
+economicImpactSummary$EVTYPE <- factor(economicImpactSummary$EVTYPE, levels = economicImpactSummary$EVTYPE[order(economicImpactSummary$total, decreasing = TRUE)])
+```
+
+## Results
+
+### Storm events and their impact on population health
+
+After performing the data summarization from the data analysis section, we can construct the following plots for injuries and fatalities:
+```{r plotPopulationHealthImpactSummary,echo=TRUE,fig.width=15,fig.height=30}
+plot1 <- ggplot(data = populationHealthImpactSummary, aes(x = EVTYPE, y = total / 1e3, fill = EVTYPE))
+plot1 <- plot1 + geom_bar(stat = "identity", position = position_dodge(), colour = "black")
+plot1 <- plot1 + scale_y_continuous(breaks = seq(from = 0, to = 100, by = 2))
+plot1 <- plot1 + labs(x = "Event type")
+plot1 <- plot1 + labs(y = "Total injuries and fatalities (Thousand)")
+plot1 <- plot1 + theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1), legend.position = "none")
+plot1 <- plot1 + ggtitle("Total impact by event type")
+
+plot2 <- ggplot(data = populationHealthImpactSummary, aes(x = EVTYPE, y = totalInjuries / 1e3, fill = EVTYPE))
+plot2 <- plot2 + geom_bar(stat = "identity", position = position_dodge(), colour = "black")
+plot2 <- plot2 + scale_y_continuous(breaks = seq(from = 0, to = 100, by = 2))
+plot2 <- plot2 + labs(x = "Event type")
+plot2 <- plot2 + labs(y = "Total injuries (Thousand)")
+plot2 <- plot2 + theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1), legend.position = "none")
+plot2 <- plot2 + ggtitle("Total injuries by event type")
+
+plot3 <- ggplot(data = populationHealthImpactSummary, aes(x = EVTYPE, y = totalFatalities / 1e3, fill = EVTYPE))
+plot3 <- plot3 + geom_bar(stat = "identity", position = position_dodge(), colour = "black")
+plot3 <- plot3 + scale_y_continuous(breaks = seq(from = 0, to = 6, by = 0.5))
+plot3 <- plot3 + labs(x = "Event type")
+plot3 <- plot3 + labs(y = "Total fatalities (Thousand)")
+plot3 <- plot3 + theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1), legend.position = "none")
+plot3 <- plot3 + ggtitle("Total fatalities by event type")
+
+plot4 <- ggplot(data = populationHealthImpactSummary, aes(x = EVTYPE, y = meanInjuries, fill = EVTYPE))
+plot4 <- plot4 + geom_bar(stat = "identity", position = position_dodge(), colour = "black")
+plot4 <- plot4 + labs(x = "Event type")
+plot4 <- plot4 + labs(y = "Mean injuries")
+plot4 <- plot4 + theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1), legend.position = "none")
+plot4 <- plot4 + ggtitle("Mean injuries by event type occurrence")
+
+plot5 <- ggplot(data = populationHealthImpactSummary, aes(x = EVTYPE, y = meanFatalities, fill = EVTYPE))
+plot5 <- plot5 + geom_bar(stat = "identity", position = position_dodge(), colour = "black")
+plot5 <- plot5 + labs(x = "Event type")
+plot5 <- plot5 + labs(y = "Mean fatalities")
+plot5 <- plot5 + theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1), legend.position = "none")
+plot5 <- plot5 + ggtitle("Mean fatalities by event type occurrence")
+
+multiplot(plot1, plot2, plot3, plot4, plot5, cols = 2)
+```
+
+Actual values:
+```{r displayPopulationHealthImpactSummary,echo=TRUE}
+summaryTable <- format(populationHealthImpactSummary, big.mark = ",", decimal.mark = ".") 
+kable(summaryTable, format = "markdown", col.names = c("Event type", "Mean injuries", "Mean fatalities", "Injuries", "Fatalities", "Total"), row.names = FALSE)
+```
+
+**From these we can conclude that the primary impacting event type on the population health is the *`r as.character(populationHealthImpactSummary$EVTYPE[1])`***. The *`r as.character(populationHealthImpactSummary$EVTYPE[1])`* has caused `r as.character(populationHealthImpactSummary$totalInjuries[1])` injuries and `r as.character(populationHealthImpactSummary$totalFatalities[1])` fatalities. Between these two we have a total effect, from 1950 to Nov. 2011, of `r as.character(populationHealthImpactSummary$total[1])` injured or dead persons. In both instances it has been the maximum recorded injuries and fatalities out of any event type.
+
+**The event type that causes the most highest amount of fatalities on every occurrence is `r as.character(populationHealthImpactSummary$EVTYPE[which.max(populationHealthImpactSummary$meanFatalities)])`**. On average, it causes a loss of `r as.character(max(populationHealthImpactSummary$meanFatalities))` persons. **The event type that causes the most highest amount of injuries on every occurrence is `r as.character(populationHealthImpactSummary$EVTYPE[which.max(populationHealthImpactSummary$meanInjuries)])`**. On average, it generates `r as.character(max(populationHealthImpactSummary$meanInjuries))` injured persons.
+
+### Storm events and their impact on the economy
+
+After performing the data summarization from the data analysis section, we can construct the following plots for property and crop damage:
+```{r plotEconomicImpactSummary,echo=TRUE,fig.width=15,fig.height=30}
+plot6 <- ggplot(data = economicImpactSummary, aes(x = EVTYPE, y = total / 1e9, fill = EVTYPE))
+plot6 <- plot6 + geom_bar(stat = "identity", position = position_dodge(), colour = "black")
+plot6 <- plot6 + scale_y_continuous(breaks = seq(from = 0, to = 160, by = 5))
+plot6 <- plot6 + labs(x = "Event type")
+plot6 <- plot6 + labs(y = "Total property and crop damage (Billion USD)")
+plot6 <- plot6 + theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1), legend.position = "none")
+plot6 <- plot6 + ggtitle("Total damage by event type")
+
+plot7 <- ggplot(data = economicImpactSummary, aes(x = EVTYPE, y = totalPropertyDamage / 1e9, fill = EVTYPE))
+plot7 <- plot7 + geom_bar(stat = "identity", position = position_dodge(), colour = "black")
+plot7 <- plot7 + scale_y_continuous(breaks = seq(from = 0, to = 150, by = 5))
+plot7 <- plot7 + labs(x = "Event type")
+plot7 <- plot7 + labs(y = "Property damage (Billion USD)")
+plot7 <- plot7 + theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1), legend.position = "none")
+plot7 <- plot7 + ggtitle("Total property damage by event type")
+
+plot8 <- ggplot(data = economicImpactSummary, aes(x = EVTYPE, y = totalCropDamage / 1e9, fill = EVTYPE))
+plot8 <- plot8 + geom_bar(stat = "identity", position = position_dodge(), colour = "black")
+plot8 <- plot8 + scale_y_continuous(breaks = seq(from = 0, to = 15, by = 0.5))
+plot8 <- plot8 + labs(x = "Event type")
+plot8 <- plot8 + labs(y = "Crop damage (Billion USD)")
+plot8 <- plot8 + theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1), legend.position = "none")
+plot8 <- plot8 + ggtitle("Total crop damage by event type")
+
+plot9 <- ggplot(data = economicImpactSummary, aes(x = EVTYPE, y = meanPropertyDamage / 1e6, fill = EVTYPE))
+plot9 <- plot9 + geom_bar(stat = "identity", position = position_dodge(), colour = "black")
+plot9 <- plot9 + scale_y_continuous(breaks = seq(from = 0, to = 700, by = 50))
+plot9 <- plot9 + labs(x = "Event type")
+plot9 <- plot9 + labs(y = "Mean property damage (Thousand USD)")
+plot9 <- plot9 + theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1), legend.position = "none")
+plot9 <- plot9 + ggtitle("Mean property damage by event type occurrence")
+
+plot10 <- ggplot(data = economicImpactSummary, aes(x = EVTYPE, y = meanCropDamage / 1e6, fill = EVTYPE))
+plot10 <- plot10 + geom_bar(stat = "identity", position = position_dodge(), colour = "black")
+plot10 <- plot10 + scale_y_continuous(breaks = seq(from = 0, to = 30, by = 3))
+plot10 <- plot10 + labs(x = "Event type")
+plot10 <- plot10 + labs(y = "Mean crop damage (Thousand USD)")
+plot10 <- plot10 + theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1), legend.position = "none")
+plot10 <- plot10 + ggtitle("Mean crop damage by event type occurrence")
+
+multiplot(plot6, plot7, plot8, plot9, plot10, cols = 2)
+```
+
+Actual values:
+```{r displaySummaryOfPropertyAndCropDamagesByPermittedEventType,echo=TRUE}
+summaryTable <- format(economicImpactSummary, big.mark = ",", decimal.mark = ".") 
+kable(summaryTable, format = "markdown", col.names = c("Event type", "Mean property damage", "Mean crop damage", "Property damage", "Crop damage", "Total damage"), row.names = FALSE)
+```
+
+**From these we can conclude that the overall primary impacting event type on the economy is the *`r as.character(economicImpactSummary$EVTYPE[1])`***. The *`r as.character(economicImpactSummary$EVTYPE[1])`* has caused `r as.character(economicImpactSummary$totalPropertyDamage[1])` USD in property damage and `r as.character(economicImpactSummary$totalCropDamage[1])` USD in crop damage. Between these two we have a total loss, from 1950 to Nov. 2011, of `r as.character(economicImpactSummary$total[1])` USD. While it is the maximum recorded amount for property damage, *`r economicImpactSummary$EVTYPE[which.max(economicImpactSummary$totalCropDamage)]`* has the maximum recorded amount for crop damage.
+
+**The event type that causes the most highest amount of property and crop damage on every occurrence is `r as.character(economicImpactSummary$EVTYPE[which.max(economicImpactSummary$meanCropDamage)])`**. On average, it causes a loss of `r as.character(max(economicImpactSummary$meanPropertyDamage))` in property damage and `r as.character(max(economicImpactSummary$meanCropDamage))` USD in crop damage.
